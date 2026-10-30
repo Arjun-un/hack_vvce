@@ -3,6 +3,8 @@ const cors = require('cors');
 const path = require('path');
 require('dotenv').config();
 const connectDB = require('./config/db');
+const operatorRoutes = require('./routes/operatorRoutes');
+const { GoogleGenAI } = require('@google/genai');
 
 // Connect to MongoDB Database
 connectDB();
@@ -18,14 +20,58 @@ app.use(express.json());
 app.use('/api/customer', require('./routes/customerRoutes'));
 app.use('/api/clinic', require('./routes/clinicRoutes'));
 app.use('/api/graduate', require('./routes/graduateRoutes'));
+app.use('/api/operator', operatorRoutes);
 
-// Sample Route & Health check
+// Health check & Sample Route
 app.get('/api', (req, res) => {
   res.json({ message: 'Welcome to OpsLoop MERN Backend API' });
 });
 
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  res.json({
+    status: 'ok',
+    service: 'OpsLoop Backend API',
+    automationEngine: 'Online (Node.js Native)',
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Gemini AI live triage endpoint
+app.post('/api/gemini/triage', async (req, res) => {
+  try {
+    const { message, clinicName } = req.body;
+    if (!process.env.GEMINI_API_KEY) {
+      return res.status(400).json({ success: false, error: 'GEMINI_API_KEY not configured' });
+    }
+
+    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+    const prompt = `
+      You are the OpsLoop AI triage assistant for "${clinicName || 'Local Clinic'}".
+      Analyze this customer request and return a JSON object with keys:
+      - intent: (e.g. "BOOKING_REQUEST", "GENERAL_ENQUIRY", "EMERGENCY_ESCALATION", "CANCELLATION")
+      - confidenceScore: (number between 0 and 100)
+      - needsHumanReview: (boolean, true if ambiguous, urgent, or confidence < 80)
+      - extractedDetails: { patientName, requestedDate, requestedTime, doctorSpeciality, urgency }
+      - suggestedActions: array of 3 short action strings for the graduate operator
+      - summary: 1-sentence operator summary
+
+      Customer Message: "${message}"
+    `;
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.8-flash',
+      contents: prompt,
+      config: {
+        responseMimeType: 'application/json'
+      }
+    });
+
+    const parsed = JSON.parse(response.text);
+    res.json({ success: true, data: parsed });
+  } catch (error) {
+    console.error('Gemini triage error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
 });
 
 // Serve Frontend Static Distribution (Production Build)
