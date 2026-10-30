@@ -162,3 +162,4 @@ The platform bridges three groups:
 - [ ] Graduate task queue endpoints & resolution workflow
 - [ ] Frontend: Customer QR portal & Booking form
 - [ ] Frontend: Dashboards (Admin, Graduate, Business Owner)
+
