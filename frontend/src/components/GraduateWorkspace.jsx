@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import {
   Building2,
   AlertCircle,
@@ -343,7 +344,7 @@ export default function GraduateWorkspace() {
         <div>
           {/* Logo */}
           <div className="h-16 px-6 border-b border-slate-200 flex items-center justify-between">
-            <div className="flex items-center gap-2.5">
+            <Link to="/" title="Back to OpsLoop Home" className="flex items-center gap-2.5 hover:opacity-90 transition-opacity">
               <div className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center text-white shadow-sm shadow-indigo-200">
                 <Activity className="w-4 h-4 stroke-[2.5]" />
               </div>
@@ -351,7 +352,7 @@ export default function GraduateWorkspace() {
               <span className="text-[10px] font-semibold tracking-wider uppercase bg-violet-50 text-violet-700 border border-violet-200 px-1.5 py-0.5 rounded">
                 Operator
               </span>
-            </div>
+            </Link>
           </div>
 
           {/* Navigation Links */}

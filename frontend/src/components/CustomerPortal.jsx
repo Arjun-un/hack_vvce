@@ -153,7 +153,7 @@ export default function CustomerPortal() {
           <div className="flex items-center justify-between mb-3">
             <Link to="/" className="text-xs text-indigo-200 hover:text-white flex items-center gap-1">
               <ArrowLeft className="w-3.5 h-3.5" />
-              <span>Back to Operator</span>
+              <span>Back to Home</span>
             </Link>
             <span className="text-[10px] font-semibold bg-emerald-400/20 text-emerald-300 border border-emerald-400/30 px-2 py-0.5 rounded-full flex items-center gap-1">
               <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse"></span>
