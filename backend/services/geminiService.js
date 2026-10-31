@@ -1,19 +1,76 @@
 const { GoogleGenAI } = require('@google/genai');
 
-let aiClient = null;
-try {
-  if (process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'your_gemini_api_key_here') {
-    aiClient = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+const ACTIVE_GEMINI_MODELS = [
+  'gemini-flash-lite-latest',
+  'gemini-3.5-flash',
+  'gemini-3.1-flash-lite'
+];
+
+/**
+ * Helper to call Gemini REST API with auto-fallback across active models
+ */
+async function callGeminiApi(prompt, systemInstruction = '', responseSchema = null) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey || apiKey === 'your_gemini_api_key_here') {
+    throw new Error('GEMINI_API_KEY not configured');
   }
-} catch (e) {
-  console.warn('Gemini AI initialization notice:', e.message);
+
+  for (const model of ACTIVE_GEMINI_MODELS) {
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 6000); // 6s timeout
+
+      const bodyPayload = {
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: {
+          responseMimeType: 'application/json',
+          temperature: 0.3
+        }
+      };
+
+      if (systemInstruction) {
+        bodyPayload.systemInstruction = {
+          parts: [{ text: systemInstruction }]
+        };
+      }
+
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(bodyPayload),
+        signal: controller.signal
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        console.warn(`[Gemini API] ${model} returned status ${res.status}:`, errorData?.error?.message?.slice(0, 80));
+        continue; // Try next active model
+      }
+
+      const data = await res.json();
+      const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!text) continue;
+
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        return JSON.parse(jsonMatch[0]);
+      }
+    } catch (err) {
+      console.warn(`[Gemini API] Failed on model ${model}:`, err.message);
+    }
+  }
+
+  throw new Error('All Gemini models unavailable or rate limited');
 }
 
 /**
  * Classifies patient inquiries and generates safe answers based on clinic context
  */
 async function triagePatientMessage(message, clinicContext) {
-  // First, check for acute medical emergencies locally as safety guardrail
+  // Guardrail: Acute emergency check
   const lowerMsg = message.toLowerCase();
   const emergencyKeywords = ['heart attack', 'chest pain', 'unconscious', 'breathing difficulty', 'profuse bleeding', 'poison', 'stroke'];
   const isEmergency = emergencyKeywords.some(k => lowerMsg.includes(k));
@@ -22,105 +79,161 @@ async function triagePatientMessage(message, clinicContext) {
     return {
       intent: 'emergency_escalation',
       aiConfidence: 0.99,
-      aiResponse: '⚠️ CRITICAL ALERT: If the patient is experiencing acute chest pain, severe breathing difficulty, or loss of consciousness, please dial 108 or proceed immediately to the nearest Hospital Emergency Casualty. Clinic OPD cannot handle acute resuscitation.',
+      aiResponse: '⚠️ CRITICAL ALERT: If experiencing acute chest pain, severe breathing difficulty, or loss of consciousness, please dial 108 or proceed immediately to the nearest Hospital Casualty. Sanjeevani Clinic OPD cannot handle acute resuscitation.',
       requiresGraduate: false,
     };
   }
 
-  // If Gemini client is ready, prompt Gemini
-  if (aiClient) {
-    try {
-      const prompt = `You are an automated medical clinic receptionist AI for "${clinicContext.name}".
-Clinic Address: ${clinicContext.address}
-Operating Hours: ${clinicContext.operatingHours}
-Clinic Status: ${clinicContext.currentStatus}
-Active Emergency Notice: ${clinicContext.emergencyNotice || 'None'}
-Active Doctors: ${clinicContext.doctorsList || 'Dr. Rajesh Sharma (General Medicine), Dr. Sneha Kulkarni (Pediatrics)'}
+  // Attempt live Gemini triage
+  try {
+    const prompt = `You are the automated medical receptionist AI for "${clinicContext.name}".
+Clinic Address: ${clinicContext.address || 'Mysuru'}
+Operating Hours: ${clinicContext.operatingHours || '09:00 AM - 08:30 PM'}
+Current Clinic Status: ${clinicContext.currentStatus || 'Open'}
+Active Notice: ${clinicContext.emergencyNotice || 'None'}
+Active Doctors: ${clinicContext.doctorsList || 'Dr. Ramesh Rao (Cardiologist, ₹500), Dr. Sneha Patil (Pediatrician, ₹400), Dr. Amit Joshi (General Medicine, ₹350)'}
 
 Patient Inquiry: "${message}"
 
-Task:
-1. Classify the intent into ONE of: "general_faq", "appointment_booking", "appointment_conflict", "emergency_escalation".
-2. Provide a helpful, warm, professional 1-2 sentence response.
-3. NEVER give clinical diagnoses or prescribe medicines.
-4. If the user asks for a slot outside working hours or with an off-duty doctor, set intent to "appointment_conflict".
+Instructions:
+1. Classify the intent: "general_faq", "appointment_booking", "appointment_conflict", or "emergency_escalation".
+2. Provide a warm, helpful, professional response in 1-2 sentences. Mention relevant doctor name, fees, or operating hours if applicable.
+3. NEVER provide drug prescriptions or definitive clinical diagnoses.
+4. Output strictly valid JSON.
 
-Format your response strictly as JSON:
+JSON Schema:
 {
-  "intent": "general_faq" | "appointment_booking" | "appointment_conflict" | "emergency_escalation",
+  "intent": "general_faq",
   "aiConfidence": 0.95,
-  "aiResponse": "Your response here"
+  "aiResponse": "Helpful answer here"
 }`;
 
-      let response;
-      try {
-        const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Gemini API timeout')), 6000));
-        const callPromise = aiClient.models.generateContent({
-          model: 'gemini-3.8-flash',
-          contents: prompt,
-        });
-        response = await Promise.race([callPromise, timeoutPromise]);
-      } catch (mErr) {
-        try {
-          response = await aiClient.models.generateContent({
-            model: 'gemini-flash-latest',
-            contents: prompt,
-          });
-        } catch (mErr2) {
-          throw new Error('Both Gemini models busy');
-        }
-      }
-
-      const text = response.text ? response.text.trim() : '';
-      const jsonMatch = text.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        const parsed = JSON.parse(jsonMatch[0]);
-        return {
-          intent: parsed.intent || 'general_faq',
-          aiConfidence: parsed.aiConfidence || 0.92,
-          aiResponse: parsed.aiResponse,
-          requiresGraduate: parsed.intent === 'appointment_conflict'
-        };
-      }
-    } catch (apiError) {
-      console.warn('Gemini API call failed, falling back to intelligent rule engine:', apiError.message);
+    const parsed = await callGeminiApi(prompt);
+    if (parsed && parsed.aiResponse) {
+      return {
+        intent: parsed.intent || 'general_faq',
+        aiConfidence: parsed.aiConfidence || 0.92,
+        aiResponse: parsed.aiResponse,
+        requiresGraduate: parsed.intent === 'appointment_conflict'
+      };
     }
+  } catch (err) {
+    console.warn('Gemini live triage error, using local expert rules:', err.message);
   }
 
-  // Robust Rule-Engine Fallback
-  if (lowerMsg.includes('fee') || lowerMsg.includes('cost') || lowerMsg.includes('charge')) {
-    return {
-      intent: 'general_faq',
-      aiConfidence: 0.95,
-      aiResponse: `General physician consultation fee at ${clinicContext.name} is ₹400, and specialist pediatrics/ortho is ₹500. No advance payment required for online QR booking.`,
-      requiresGraduate: false,
-    };
-  }
-
-  if (lowerMsg.includes('timing') || lowerMsg.includes('open') || lowerMsg.includes('time') || lowerMsg.includes('available')) {
+  // Fallback intelligent rule engine
+  if (lowerMsg.includes('fee') || lowerMsg.includes('cost') || lowerMsg.includes('charge') || lowerMsg.includes('price')) {
     return {
       intent: 'general_faq',
       aiConfidence: 0.96,
-      aiResponse: `${clinicContext.name} OPD operates from ${clinicContext.operatingHours}. Today's active status is ${clinicContext.currentStatus.toUpperCase()}.`,
+      aiResponse: `General physician consultation fee at ${clinicContext.name} is ₹350 - ₹400, and cardiology/pediatrics specialist is ₹500. No advance payment required for online QR booking.`,
       requiresGraduate: false,
     };
   }
 
-  if (lowerMsg.includes('book') || lowerMsg.includes('appointment') || lowerMsg.includes('slot')) {
+  if (lowerMsg.includes('timing') || lowerMsg.includes('open') || lowerMsg.includes('time') || lowerMsg.includes('available') || lowerMsg.includes('hours')) {
     return {
-      intent: 'appointment_booking',
-      aiConfidence: 0.93,
-      aiResponse: 'You can book an immediate slot using the booking form above. Select your doctor and preferred time slot.',
+      intent: 'general_faq',
+      aiConfidence: 0.97,
+      aiResponse: `${clinicContext.name} OPD operates from ${clinicContext.operatingHours || '09:00 AM to 08:30 PM'}. Today's active status is ${String(clinicContext.currentStatus || 'Open').toUpperCase()}.`,
+      requiresGraduate: false,
+    };
+  }
+
+  if (lowerMsg.includes('doctor') || lowerMsg.includes('sneha') || lowerMsg.includes('ramesh') || lowerMsg.includes('pediatric') || lowerMsg.includes('heart')) {
+    return {
+      intent: 'general_faq',
+      aiConfidence: 0.94,
+      aiResponse: `Available doctors today: ${clinicContext.doctorsList || 'Dr. Ramesh Rao (Cardiologist) & Dr. Sneha Patil (Pediatrician)'}. You can book an OP token directly from the booking tab.`,
       requiresGraduate: false,
     };
   }
 
   return {
     intent: 'general_faq',
-    aiConfidence: 0.88,
-    aiResponse: `Thank you for reaching out to ${clinicContext.name}. Our front desk and OpsLoop team have recorded your message and will assist you promptly.`,
+    aiConfidence: 0.90,
+    aiResponse: `Thank you for contacting ${clinicContext.name}. For immediate appointments, select your preferred doctor and slot above, or ask our front desk receptionist upon arrival.`,
     requiresGraduate: false,
   };
 }
 
-module.exports = { triagePatientMessage };
+/**
+ * Recommends the most suitable doctor and slot based on patient symptoms and demographics
+ */
+async function recommendDoctorForSymptoms({ symptoms, age, gender, clinicContext, doctors = [] }) {
+  const doctorsContext = doctors.map(d => ({
+    id: d._id || d.id,
+    name: d.name,
+    speciality: d.speciality,
+    fee: d.fee,
+    isOnDuty: d.isOnDuty,
+    room: d.room
+  }));
+
+  try {
+    const prompt = `You are a medical triage AI assistant for "${clinicContext.name || 'Sanjeevani Clinic'}".
+Patient Age: ${age || 'Not specified'}
+Patient Gender: ${gender || 'Not specified'}
+Reported Symptoms / Chief Complaint: "${symptoms}"
+
+Available Doctors:
+${JSON.stringify(doctorsContext, null, 2)}
+
+Task:
+1. Identify the most clinically appropriate doctor from the list for these symptoms (consider age for Pediatrics, cardiac symptoms for Cardiology, general malaise for General Medicine, etc.).
+2. If symptoms are potentially acute emergencies, flag isEmergency: true.
+3. Provide a warm, 1-sentence explanation why this doctor is recommended.
+4. Suggest whether Morning or Evening slot is ideal.
+
+Format strictly as JSON:
+{
+  "recommendedDoctorId": "ID_OF_THE_BEST_DOCTOR",
+  "recommendedDoctorName": "Doctor Name",
+  "speciality": "Speciality",
+  "reason": "1-sentence friendly explanation for the patient",
+  "suggestedShift": "morning" | "evening",
+  "isEmergency": false,
+  "confidenceScore": 95
+}`;
+
+    const parsed = await callGeminiApi(prompt);
+    if (parsed && (parsed.recommendedDoctorId || parsed.recommendedDoctorName)) {
+      return parsed;
+    }
+  } catch (err) {
+    console.warn('Gemini doctor recommendation fallback:', err.message);
+  }
+
+  // Local rule-based recommendation fallback
+  const s = (symptoms || '').toLowerCase();
+  const numAge = Number(age);
+
+  let targetDoc = doctors.find(d => d.isOnDuty) || doctors[0];
+
+  if ((numAge && numAge < 15) || s.includes('child') || s.includes('baby') || s.includes('kid')) {
+    const pedia = doctors.find(d => d.speciality.toLowerCase().includes('pediatric'));
+    if (pedia) targetDoc = pedia;
+  } else if (s.includes('chest') || s.includes('heart') || s.includes('bp') || s.includes('palpitation') || s.includes('breath')) {
+    const cardio = doctors.find(d => d.speciality.toLowerCase().includes('cardio'));
+    if (cardio) targetDoc = cardio;
+  } else if (s.includes('bone') || s.includes('joint') || s.includes('knee') || s.includes('back') || s.includes('fracture')) {
+    const ortho = doctors.find(d => d.speciality.toLowerCase().includes('ortho'));
+    if (ortho) targetDoc = ortho;
+  }
+
+  return {
+    recommendedDoctorId: targetDoc?._id || targetDoc?.id || '',
+    recommendedDoctorName: targetDoc?.name || 'Duty Doctor',
+    speciality: targetDoc?.speciality || 'General Medicine',
+    reason: `Based on your symptoms and age, ${targetDoc?.name || 'our doctor'} specializes in ${targetDoc?.speciality || 'general health'} and is best suited for your consultation.`,
+    suggestedShift: 'morning',
+    isEmergency: s.includes('severe chest') || s.includes('unconscious'),
+    confidenceScore: 88
+  };
+}
+
+module.exports = {
+  triagePatientMessage,
+  recommendDoctorForSymptoms,
+  callGeminiApi
+};

@@ -148,6 +148,17 @@ export default function QrStandeeModal({ clinic, onClose, publicUrl }) {
             {copied ? <Check size={15} style={{ color: 'var(--emerald-600)' }} /> : <Copy size={15} />}
             <span>{copied ? 'Link Copied!' : 'Copy Link'}</span>
           </button>
+
+          <a 
+            href={portalUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="btn btn-secondary"
+            style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: '0 14px', textDecoration: 'none', color: 'var(--teal-700)', borderColor: 'var(--teal-200)' }}
+            title="Open Live Patient Portal"
+          >
+            <ExternalLink size={15} />
+          </a>
         </div>
       </div>
     </div>

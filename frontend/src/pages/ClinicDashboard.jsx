@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useParams, Link } from 'react-router-dom';
 import { initialClinicData } from '../data/mockClinicData';
 import { 
   getClinicDashboard, 
@@ -7,27 +8,36 @@ import {
   createWalkInAppointment, 
   updateAppointmentStatus, 
   toggleDoctorDuty, 
-  setDoctorDelay 
+  setDoctorDelay,
+  confirmNetworkAlertApi,
+  updateNetworkAlertStatusApi
 } from '../services/api';
 
 import ClinicNavbar from '../components/clinic/ClinicNavbar';
 import EmergencyAlertBanner from '../components/clinic/EmergencyAlertBanner';
+import NetworkDropAlertsBanner from '../components/clinic/NetworkDropAlertsBanner';
 import StatsOverview from '../components/clinic/StatsOverview';
 import LiveAppointmentQueue from '../components/clinic/LiveAppointmentQueue';
 import DoctorRosterGrid from '../components/clinic/DoctorRosterGrid';
 import AiInquiryFeed from '../components/clinic/AiInquiryFeed';
 import AssignedGraduateCard from '../components/clinic/AssignedGraduateCard';
+import ClinicSlotManager from '../components/clinic/ClinicSlotManager';
 
 import QrStandeeModal from '../components/clinic/QrStandeeModal';
 import AddWalkInModal from '../components/clinic/AddWalkInModal';
 import EmergencyBroadcastModal from '../components/clinic/EmergencyBroadcastModal';
 
 export default function ClinicDashboard() {
-  const [clinic, setClinic] = useState(initialClinicData.business);
+  const { slug } = useParams();
+  const activeSlug = slug || 'sanjeevani-clinic';
+
+  const [clinic, setClinic] = useState({ ...initialClinicData.business, slug: activeSlug });
   const [doctors, setDoctors] = useState(initialClinicData.doctors);
   const [appointments, setAppointments] = useState(initialClinicData.appointments);
   const [aiInquiries, setAiInquiries] = useState(initialClinicData.aiInquiries);
   const [graduate, setGraduate] = useState(initialClinicData.assignedGraduate);
+  const [networkAlerts, setNetworkAlerts] = useState([]);
+  const [activeSlotLocks, setActiveSlotLocks] = useState([]);
   const [isDbConnected, setIsDbConnected] = useState(false);
   const [publicUrl, setPublicUrl] = useState('');
 
@@ -36,16 +46,18 @@ export default function ClinicDashboard() {
   const [isAddWalkInOpen, setIsAddWalkInOpen] = useState(false);
   const [isEmergencyModalOpen, setIsEmergencyModalOpen] = useState(false);
 
-  // Fetch initial live data from MongoDB Atlas
+  // Fetch initial live data from MongoDB Atlas for the targeted clinic
   const loadDashboardData = async () => {
     try {
-      const data = await getClinicDashboard('sanjeevani-clinic');
+      const data = await getClinicDashboard(activeSlug);
       if (data.business) {
         setClinic(data.business);
-        if (data.doctors && data.doctors.length > 0) setDoctors(data.doctors);
-        if (data.appointments && data.appointments.length > 0) setAppointments(data.appointments);
-        if (data.aiInquiries && data.aiInquiries.length > 0) setAiInquiries(data.aiInquiries);
+        if (data.doctors) setDoctors(data.doctors);
+        if (data.appointments) setAppointments(data.appointments);
+        if (data.aiInquiries) setAiInquiries(data.aiInquiries);
         if (data.assignedGraduate) setGraduate(data.assignedGraduate);
+        if (data.networkAlerts) setNetworkAlerts(data.networkAlerts);
+        if (data.activeSlotLocks) setActiveSlotLocks(data.activeSlotLocks);
         if (data.publicUrl) setPublicUrl(data.publicUrl);
         setIsDbConnected(true);
       }
@@ -60,7 +72,7 @@ export default function ClinicDashboard() {
     // Auto-poll every 10 seconds for real-time customer QR bookings
     const interval = setInterval(loadDashboardData, 10000);
     return () => clearInterval(interval);
-  }, []);
+  }, [activeSlug]);
 
   // Handler: Change Clinic Operational Status
   const handleClinicStatusChange = async (newStatus) => {
@@ -74,8 +86,14 @@ export default function ClinicDashboard() {
 
   // Handler: Update Appointment Status in Queue
   const handleUpdateAppointmentStatus = async (id, newStatus) => {
+    if (!id) {
+      console.warn('handleUpdateAppointmentStatus called with invalid id:', id);
+      return;
+    }
+
     setAppointments(prev => prev.map(apt => {
-      if ((apt._id && apt._id === id) || apt.id === id) {
+      const aptId = apt._id || apt.id;
+      if (aptId === id) {
         return { ...apt, status: newStatus };
       }
       return apt;
@@ -111,7 +129,7 @@ export default function ClinicDashboard() {
 
     try {
       await createWalkInAppointment({
-        businessSlug: clinic.slug || 'sanjeevani-clinic',
+        businessSlug: clinic.slug || activeSlug,
         doctorId: patientData.doctorId,
         patientName: patientData.patientName,
         patientPhone: patientData.phone,
@@ -182,6 +200,30 @@ export default function ClinicDashboard() {
     }
   };
 
+  // Handler: Confirm Network Drop Alert into a Walk-In Token
+  const handleConfirmNetworkAlert = async (alertId) => {
+    try {
+      const res = await confirmNetworkAlertApi(alertId);
+      if (res?.appointment) {
+        setAppointments(prev => [res.appointment, ...prev]);
+        setNetworkAlerts(prev => prev.filter(a => (a._id || a.id) !== alertId));
+      }
+      loadDashboardData();
+    } catch (err) {
+      alert('Failed to confirm network drop alert: ' + (err.message || 'Error'));
+    }
+  };
+
+  // Handler: Dismiss Network Drop Alert
+  const handleDismissNetworkAlert = async (alertId) => {
+    try {
+      setNetworkAlerts(prev => prev.filter(a => (a._id || a.id) !== alertId));
+      await updateNetworkAlertStatusApi(alertId, 'dismissed');
+    } catch (err) {
+      console.error('Error dismissing alert:', err);
+    }
+  };
+
   // Count pending graduate review tasks
   const pendingReviewsCount = appointments.filter(a => a.status === 'pending_graduate_review').length;
 
@@ -209,6 +251,13 @@ export default function ClinicDashboard() {
 
       {/* Main Container */}
       <main className="dashboard-container" style={{ flex: 1 }}>
+        {/* Customer Network Drop Alerts (High-Reliability Alert Banner) */}
+        <NetworkDropAlertsBanner 
+          alerts={networkAlerts}
+          onConfirmAlert={handleConfirmNetworkAlert}
+          onDismissAlert={handleDismissNetworkAlert}
+        />
+
         {/* Real-time KPI Stats Overview */}
         <StatsOverview 
           appointments={appointments}
@@ -232,6 +281,15 @@ export default function ClinicDashboard() {
               doctors={doctors}
               onUpdateStatus={handleUpdateAppointmentStatus}
               onOpenAddWalkIn={() => setIsAddWalkInOpen(true)}
+            />
+
+            {/* Client Slot Manager & 20-Min Lock Controls */}
+            <ClinicSlotManager 
+              clinicSlug={clinic.slug || activeSlug}
+              doctors={doctors}
+              appointments={appointments}
+              activeSlotLocks={activeSlotLocks}
+              onRefreshLocks={loadDashboardData}
             />
 
             {/* Doctor Availability & Shift Rosters */}
@@ -304,6 +362,7 @@ export default function ClinicDashboard() {
       {isAddWalkInOpen && (
         <AddWalkInModal 
           doctors={doctors}
+          activeSlotLocks={activeSlotLocks}
           onAddAppointment={handleAddWalkIn}
           onClose={() => setIsAddWalkInOpen(false)}
         />

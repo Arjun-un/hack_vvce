@@ -5,8 +5,8 @@ import tailwindcss from '@tailwindcss/vite'
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [
-    react(),
-    tailwindcss()
+    tailwindcss(),
+    react()
   ],
   server: {
     host: true, // Exposes to local network for mobile phone QR scanning

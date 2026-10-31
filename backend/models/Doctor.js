@@ -3,6 +3,7 @@ const mongoose = require('mongoose');
 const doctorSchema = new mongoose.Schema({
   businessId: { type: mongoose.Schema.Types.ObjectId, ref: 'Business', required: true, index: true },
   name: { type: String, required: true },
+  email: { type: String, index: true },
   qualification: { type: String, required: true },
   speciality: { type: String, required: true },
   room: { type: String, required: true }, // e.g. 'Cabin 1'

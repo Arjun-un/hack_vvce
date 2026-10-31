@@ -7,9 +7,10 @@ const userSchema = new mongoose.Schema({
   phone: { type: String, required: true },
   role: { 
     type: String, 
-    enum: ['admin', 'graduate', 'business_owner'], 
+    enum: ['admin', 'graduate', 'business_owner', 'doctor'], 
     required: true 
   },
+  doctorId: { type: mongoose.Schema.Types.ObjectId, ref: 'Doctor' },
   status: { type: String, enum: ['active', 'inactive'], default: 'active' },
   createdAt: { type: Date, default: Date.now }
 });

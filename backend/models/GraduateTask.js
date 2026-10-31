@@ -1,7 +1,7 @@
 const mongoose = require('mongoose');
 
 const graduateTaskSchema = new mongoose.Schema({
-  graduateId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+  graduateId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', index: true },
   businessId: { type: mongoose.Schema.Types.ObjectId, ref: 'Business', required: true, index: true },
   appointmentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Appointment' },
   enquiryId: { type: mongoose.Schema.Types.ObjectId, ref: 'Enquiry' },
@@ -11,16 +11,19 @@ const graduateTaskSchema = new mongoose.Schema({
       'slot_conflict', 
       'off_schedule_request', 
       'doctor_delay_reassignment', 
-      'unclear_enquiry'
+      'unclear_enquiry',
+      'ai_auto_approved',
+      'manual_task',
+      'customer_network_drop'
     ], 
-    required: true 
+    default: 'slot_conflict' 
   },
   customerName: { type: String, required: true },
   customerPhone: { type: String, required: true },
   details: { type: String, required: true },
   priority: { 
     type: String, 
-    enum: ['high', 'medium', 'low'], 
+    enum: ['urgent', 'high', 'medium', 'low'], 
     default: 'medium' 
   },
   status: { 

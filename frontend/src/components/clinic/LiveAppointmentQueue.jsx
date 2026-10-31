@@ -44,14 +44,18 @@ export default function LiveAppointmentQueue({
     if (activeTab === 'pending_graduate_review' && apt.status !== 'pending_graduate_review') return false;
 
     // Doctor filter
-    if (selectedDoctor !== 'all' && apt.doctorId !== selectedDoctor) return false;
+    if (selectedDoctor !== 'all') {
+      const aptDocId = apt.doctorId?._id || apt.doctorId;
+      if (aptDocId !== selectedDoctor) return false;
+    }
 
     // Search query
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
-      const matchName = apt.patientName.toLowerCase().includes(q);
-      const matchPhone = apt.phone.includes(q);
-      const matchToken = apt.tokenNo.toLowerCase().includes(q);
+      const matchName = (apt.patientName || '').toLowerCase().includes(q);
+      const phoneVal = (apt.phone || apt.patientPhone || '').toLowerCase();
+      const matchPhone = phoneVal.includes(q);
+      const matchToken = (apt.tokenNo || '').toLowerCase().includes(q);
       if (!matchName && !matchPhone && !matchToken) return false;
     }
 
@@ -141,9 +145,12 @@ export default function LiveAppointmentQueue({
             }}
           >
             <option value="all">All Doctors</option>
-            {doctors.map(d => (
-              <option key={d.id} value={d.id}>{d.name} ({d.speciality.split(' ')[0]})</option>
-            ))}
+            {doctors.map(d => {
+              const docId = d._id || d.id;
+              return (
+                <option key={docId} value={docId}>{d.name} ({d.speciality?.split(' ')[0] || ''})</option>
+              );
+            })}
           </select>
         </div>
       </div>
@@ -213,138 +220,148 @@ export default function LiveAppointmentQueue({
                 </td>
               </tr>
             ) : (
-              filteredAppointments.map(apt => (
-                <tr key={apt.id}>
-                  {/* Token & Slot */}
-                  <td>
-                    <div style={{ fontWeight: 700, color: 'var(--teal-700)', fontSize: '14px' }}>
-                      {apt.tokenNo}
-                    </div>
-                    <div style={{ fontSize: '12px', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                      <Clock size={12} />
-                      <span>{apt.timeSlot}</span>
-                    </div>
-                  </td>
-
-                  {/* Patient Info */}
-                  <td>
-                    <div style={{ fontWeight: 600, color: 'var(--text-main)' }}>
-                      {apt.patientName}
-                    </div>
-                    {(apt.age || apt.gender || apt.bloodGroup) && (
-                      <div style={{ fontSize: '11.5px', color: 'var(--teal-700)', fontWeight: 600 }}>
-                        {[apt.age ? `${apt.age} yrs` : '', apt.gender !== 'Not specified' ? apt.gender : '', apt.bloodGroup].filter(Boolean).join(' • ')}
+              filteredAppointments.map(apt => {
+                const aptId = apt._id || apt.id;
+                const matchedDoctor = doctors.find(d => (d._id && d._id === apt.doctorId) || d.id === apt.doctorId);
+                return (
+                  <tr key={aptId || apt.tokenNo}>
+                    {/* Token & Slot */}
+                    <td>
+                      <div style={{ fontWeight: 700, color: 'var(--teal-700)', fontSize: '14px' }}>
+                        {apt.tokenNo}
                       </div>
-                    )}
-                    <div style={{ fontSize: '12px', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                      <Phone size={11} />
-                      <span>{apt.phone || apt.patientPhone}</span>
-                    </div>
-                  </td>
-
-                  {/* Doctor & Cabin */}
-                  <td>
-                    <div style={{ fontWeight: 600, color: 'var(--text-main)', fontSize: '13px' }}>
-                      {apt.doctorName}
-                    </div>
-                    {doctors.find(d => d.id === apt.doctorId) && (
-                      <div style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>
-                        {doctors.find(d => d.id === apt.doctorId).room} • {doctors.find(d => d.id === apt.doctorId).speciality}
+                      <div style={{ fontSize: '12px', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <Clock size={12} />
+                        <span>{apt.timeSlot}</span>
                       </div>
-                    )}
-                  </td>
+                    </td>
 
-                  {/* Complaint */}
-                  <td style={{ maxWidth: '220px' }}>
-                    <div style={{
-                      fontSize: '13px',
-                      color: 'var(--text-main)',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap'
-                    }} title={apt.symptoms}>
-                      {apt.symptoms}
-                    </div>
-                    {apt.conflictReason && (
-                      <div style={{ fontSize: '11px', color: 'var(--amber-700)', display: 'flex', alignItems: 'center', gap: '4px', marginTop: '2px' }}>
-                        <AlertCircle size={11} />
-                        <span>{apt.conflictReason}</span>
+                    {/* Patient Info */}
+                    <td>
+                      <div style={{ fontWeight: 600, color: 'var(--text-main)' }}>
+                        {apt.patientName}
                       </div>
-                    )}
-                  </td>
+                      {(apt.age || apt.gender || apt.bloodGroup) && (
+                        <div style={{ fontSize: '11.5px', color: 'var(--teal-700)', fontWeight: 600 }}>
+                          {[apt.age ? `${apt.age} yrs` : '', apt.gender && apt.gender !== 'Not specified' ? apt.gender : '', apt.bloodGroup].filter(Boolean).join(' • ')}
+                        </div>
+                      )}
+                      <div style={{ fontSize: '12px', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <Phone size={11} />
+                        <span>{apt.phone || apt.patientPhone}</span>
+                      </div>
+                    </td>
 
-                  {/* Source */}
-                  <td>
-                    {apt.bookingSource === 'qr_ai' ? (
-                      <span className="badge badge-ai" style={{ fontSize: '11px' }}>
-                        <QrCode size={11} />
-                        <span>QR Scan</span>
-                      </span>
-                    ) : (
-                      <span className="badge" style={{ fontSize: '11px', background: '#f1f5f9', color: '#475569' }}>
-                        <User size={11} />
-                        <span>Front-Desk</span>
-                      </span>
-                    )}
-                  </td>
+                    {/* Doctor & Cabin */}
+                    <td>
+                      <div style={{ fontWeight: 600, color: 'var(--text-main)', fontSize: '13px' }}>
+                        {apt.doctorName}
+                      </div>
+                      {matchedDoctor && (
+                        <div style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>
+                          {matchedDoctor.room} • {matchedDoctor.speciality}
+                        </div>
+                      )}
+                    </td>
 
-                  {/* Status */}
-                  <td>
-                    {getStatusBadge(apt.status)}
-                  </td>
+                    {/* Complaint */}
+                    <td style={{ maxWidth: '220px' }}>
+                      <div style={{
+                        fontSize: '13px',
+                        color: 'var(--text-main)',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap'
+                      }} title={apt.symptoms}>
+                        {apt.symptoms}
+                      </div>
+                      {apt.conflictReason && (
+                        <div style={{ fontSize: '11px', color: 'var(--amber-700)', display: 'flex', alignItems: 'center', gap: '4px', marginTop: '2px' }}>
+                          <AlertCircle size={11} />
+                          <span>{apt.conflictReason}</span>
+                        </div>
+                      )}
+                      {apt.graduateResolutionNotes && (
+                        <div style={{ fontSize: '11px', color: '#15803d', display: 'flex', alignItems: 'center', gap: '4px', marginTop: '3px' }}>
+                          <CheckCircle size={11} />
+                          <span title={apt.graduateResolutionNotes}>Specialist: {apt.graduateResolutionNotes}</span>
+                        </div>
+                      )}
+                    </td>
 
-                  {/* Actions */}
-                  <td style={{ textAlign: 'right' }}>
-                    {apt.status === 'confirmed' && (
-                      <button 
-                        onClick={() => onUpdateStatus(apt.id, 'checked_in')}
-                        className="btn btn-secondary btn-sm"
-                        style={{ borderColor: 'var(--blue-600)', color: 'var(--blue-700)', background: 'var(--blue-50)' }}
-                      >
-                        <CheckCircle size={13} />
-                        <span>Check In</span>
-                      </button>
-                    )}
+                    {/* Source */}
+                    <td>
+                      {apt.bookingSource === 'qr_ai' ? (
+                        <span className="badge badge-ai" style={{ fontSize: '11px' }} title="Scanned via Reception QR Standee & Verified by Gemini AI">
+                          <QrCode size={11} />
+                          <span>QR (AI Verified)</span>
+                        </span>
+                      ) : (
+                        <span className="badge" style={{ fontSize: '11px', background: '#f1f5f9', color: '#475569' }}>
+                          <User size={11} />
+                          <span>Front-Desk</span>
+                        </span>
+                      )}
+                    </td>
 
-                    {apt.status === 'checked_in' && (
-                      <button 
-                        onClick={() => onUpdateStatus(apt.id, 'in_consultation')}
-                        className="btn btn-secondary btn-sm"
-                        style={{ borderColor: 'var(--indigo-600)', color: 'var(--indigo-700)', background: 'var(--indigo-50)' }}
-                      >
-                        <PlayCircle size={13} />
-                        <span>Send to Doctor</span>
-                      </button>
-                    )}
+                    {/* Status */}
+                    <td>
+                      {getStatusBadge(apt.status)}
+                    </td>
 
-                    {apt.status === 'in_consultation' && (
-                      <button 
-                        onClick={() => onUpdateStatus(apt.id, 'completed')}
-                        className="btn btn-primary btn-sm"
-                      >
-                        <Check size={13} />
-                        <span>Mark Done</span>
-                      </button>
-                    )}
+                    {/* Actions */}
+                    <td style={{ textAlign: 'right' }}>
+                      {apt.status === 'confirmed' && (
+                        <button 
+                          onClick={() => onUpdateStatus(aptId, 'checked_in')}
+                          className="btn btn-secondary btn-sm"
+                          style={{ borderColor: 'var(--blue-600)', color: 'var(--blue-700)', background: 'var(--blue-50)' }}
+                        >
+                          <CheckCircle size={13} />
+                          <span>Check In</span>
+                        </button>
+                      )}
 
-                    {apt.status === 'pending_graduate_review' && (
-                      <button 
-                        onClick={() => onUpdateStatus(apt.id, 'confirmed')}
-                        className="btn btn-secondary btn-sm"
-                        style={{ borderColor: 'var(--teal-600)', color: 'var(--teal-700)' }}
-                      >
-                        <span>Confirm Overwrite</span>
-                      </button>
-                    )}
+                      {apt.status === 'checked_in' && (
+                        <button 
+                          onClick={() => onUpdateStatus(aptId, 'in_consultation')}
+                          className="btn btn-secondary btn-sm"
+                          style={{ borderColor: 'var(--indigo-600)', color: 'var(--indigo-700)', background: 'var(--indigo-50)' }}
+                        >
+                          <PlayCircle size={13} />
+                          <span>Send to Doctor</span>
+                        </button>
+                      )}
 
-                    {apt.status === 'completed' && (
-                      <span style={{ fontSize: '12px', color: 'var(--emerald-600)', fontWeight: 600 }}>
-                        ✓ Visit Finished
-                      </span>
-                    )}
-                  </td>
-                </tr>
-              ))
+                      {apt.status === 'in_consultation' && (
+                        <button 
+                          onClick={() => onUpdateStatus(aptId, 'completed')}
+                          className="btn btn-primary btn-sm"
+                        >
+                          <Check size={13} />
+                          <span>Mark Done</span>
+                        </button>
+                      )}
+
+                      {apt.status === 'pending_graduate_review' && (
+                        <button 
+                          onClick={() => onUpdateStatus(aptId, 'confirmed')}
+                          className="btn btn-secondary btn-sm"
+                          style={{ borderColor: 'var(--teal-600)', color: 'var(--teal-700)' }}
+                        >
+                          <span>Confirm Overwrite</span>
+                        </button>
+                      )}
+
+                      {apt.status === 'completed' && (
+                        <span style={{ fontSize: '12px', color: 'var(--emerald-600)', fontWeight: 600 }}>
+                          ✓ Visit Finished
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })
             )}
           </tbody>
         </table>

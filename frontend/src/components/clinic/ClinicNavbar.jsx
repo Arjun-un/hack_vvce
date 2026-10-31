@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { 
   Building2, 
   QrCode, 
@@ -9,8 +10,12 @@ import {
   AlertTriangle, 
   PauseCircle, 
   XCircle,
-  Plus
+  Plus,
+  ArrowLeft,
+  LogOut,
+  UserCheck
 } from 'lucide-react';
+import { useAuth } from '../../context/AuthContext';
 
 export default function ClinicNavbar({ 
   clinic, 
@@ -19,6 +24,7 @@ export default function ClinicNavbar({
   onOpenEmergencyModal,
   onOpenAddWalkIn
 }) {
+  const { user, logout } = useAuth();
   const [timeStr, setTimeStr] = useState('');
   const [isStatusMenuOpen, setIsStatusMenuOpen] = useState(false);
 
@@ -230,6 +236,61 @@ export default function ClinicNavbar({
             <Plus size={15} />
             <span>New Walk-In</span>
           </button>
+
+          {/* Return to Operator Workspace */}
+          <Link
+            to="/operator"
+            className="btn btn-secondary btn-sm"
+            style={{
+              textDecoration: 'none',
+              borderColor: '#c7d2fe',
+              color: '#4338ca',
+              background: '#eef2ff'
+            }}
+            title="Switch / View Operator Console"
+          >
+            <ArrowLeft size={14} />
+            <span>Operator Console</span>
+          </Link>
+
+          {/* Authenticated Owner Profile & Sign Out */}
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            paddingLeft: '8px',
+            borderLeft: '1px solid var(--border-subtle)'
+          }}>
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '4px 10px',
+              borderRadius: '20px',
+              background: 'var(--bg-subtle)',
+              border: '1px solid var(--border-subtle)',
+              fontSize: '12px',
+              fontWeight: 600,
+              color: 'var(--text-main)'
+            }}>
+              <UserCheck size={14} color="var(--emerald-600)" />
+              <span>{user?.name || 'Dr. Rajesh Sharma'}</span>
+            </div>
+
+            <button
+              onClick={logout}
+              className="btn btn-secondary btn-sm"
+              style={{
+                borderColor: 'var(--border-subtle)',
+                color: 'var(--rose-600)',
+                background: 'var(--bg-surface)'
+              }}
+              title="Sign Out of Clinic Owner Cockpit"
+            >
+              <LogOut size={14} />
+              <span>Sign Out</span>
+            </button>
+          </div>
         </div>
       </div>
     </header>

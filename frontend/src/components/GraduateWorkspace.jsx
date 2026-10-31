@@ -25,11 +25,15 @@ import {
   X,
   Copy,
   Calendar,
-  MessageSquare
+  MessageSquare,
+  LogOut
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
+import QrStandeeModal from './clinic/QrStandeeModal';
+import { useAuth } from '../context/AuthContext';
 
 export default function GraduateWorkspace() {
+  const { user, logout } = useAuth();
   // State
   const [activeNav, setActiveNav] = useState('Overview');
   const [isSyncing, setIsSyncing] = useState(false);
@@ -38,12 +42,14 @@ export default function GraduateWorkspace() {
   const [selectedTask, setSelectedTask] = useState(null);
   const [operatorNotes, setOperatorNotes] = useState('');
   const [selectedAction, setSelectedAction] = useState('');
+  const [chosenSlot, setChosenSlot] = useState('original');
   const [activeTabFilter, setActiveTabFilter] = useState('all');
   const [showQRModal, setShowQRModal] = useState(false);
   const [qrClinic, setQrClinic] = useState(null);
+  const [publicUrl, setPublicUrl] = useState('');
   const [showAddTaskModal, setShowAddTaskModal] = useState(false);
   const [newTaskTitle, setNewTaskTitle] = useState('');
-  const [newTaskClinic, setNewTaskClinic] = useState('GreenLife Clinic');
+  const [newTaskClinic, setNewTaskClinic] = useState('Sanjeevani Clinic');
   const [newTaskPriority, setNewTaskPriority] = useState('High');
   const [copiedLink, setCopiedLink] = useState(false);
 
@@ -58,10 +64,23 @@ export default function GraduateWorkspace() {
   // Assigned Clinics
   const [clinics, setClinics] = useState([
     {
+      id: 'c0',
+      name: 'Sanjeevani Clinic',
+      slug: 'sanjeevani-clinic',
+      category: 'Multi-Speciality OPD & Emergency Care',
+      address: '14th Cross, Ashok Nagar, Mysuru, Karnataka',
+      status: 'Active & Synced',
+      pendingEnquiries: 1,
+      bookingsToday: 16,
+      workflowHealth: 100,
+      phone: '+91 98450 12345'
+    },
+    {
       id: 'c1',
       name: 'GreenLife Clinic',
       slug: 'greenlife-clinic',
       category: 'Multi-Speciality & Dentistry',
+      address: '14th Cross, Indiranagar, Bengaluru',
       status: 'Active & Synced',
       pendingEnquiries: 3,
       bookingsToday: 14,
@@ -73,6 +92,7 @@ export default function GraduateWorkspace() {
       name: 'CityCare Medical Centre',
       slug: 'citycare-medical',
       category: 'Family Medicine & Diagnostics',
+      address: 'Brigade Road, Bengaluru',
       status: 'Active & Synced',
       pendingEnquiries: 2,
       bookingsToday: 18,
@@ -84,6 +104,7 @@ export default function GraduateWorkspace() {
       name: 'Sunrise Family Clinic',
       slug: 'sunrise-family',
       category: 'Pediatrics & General Care',
+      address: 'Koramangala 4th Block, Bengaluru',
       status: 'Active & Synced',
       pendingEnquiries: 1,
       bookingsToday: 9,
@@ -95,6 +116,7 @@ export default function GraduateWorkspace() {
       name: 'PrimeCare Health',
       slug: 'primecare-health',
       category: 'Orthopedics & Physiotherapy',
+      address: 'JP Nagar 2nd Phase, Bengaluru',
       status: 'Active & Synced',
       pendingEnquiries: 0,
       bookingsToday: 12,
@@ -184,7 +206,34 @@ export default function GraduateWorkspace() {
 
   // Try fetching live data from backend if available
   useEffect(() => {
-    fetch('http://localhost:5000/api/operator/stats')
+    const apiBase = (typeof window !== 'undefined' && window.location.hostname !== 'localhost')
+      ? window.location.origin
+      : 'http://localhost:5000';
+
+    // Sync live clinic dashboard to get ngrok publicUrl and active state
+    fetch(`${apiBase}/api/clinic/sanjeevani-clinic/dashboard`)
+      .then(res => res.json())
+      .then(data => {
+        if (data.publicUrl) setPublicUrl(data.publicUrl);
+        if (data.business) {
+          setClinics(prev => {
+            const hasSanjeevani = prev.some(c => c.slug === 'sanjeevani-clinic');
+            if (hasSanjeevani) {
+              return prev.map(c => c.slug === 'sanjeevani-clinic' ? {
+                ...c,
+                name: data.business.name,
+                address: data.business.address,
+                pendingEnquiries: data.aiInquiries?.length || c.pendingEnquiries,
+                bookingsToday: data.appointments?.length || c.bookingsToday
+              } : c);
+            }
+            return prev;
+          });
+        }
+      })
+      .catch(() => {});
+
+    fetch(`${apiBase}/api/operator/stats`)
       .then(res => res.json())
       .then(res => {
         if (res.success) {
@@ -195,7 +244,7 @@ export default function GraduateWorkspace() {
         // Fallback to local state seamlessly
       });
 
-    fetch('http://localhost:5000/api/operator/tasks')
+    fetch(`${apiBase}/api/operator/tasks`)
       .then(res => res.json())
       .then(res => {
         if (res.success && res.data.length > 0) {
@@ -214,26 +263,44 @@ export default function GraduateWorkspace() {
   const handleSelectTask = (task) => {
     setSelectedTask(task);
     setSelectedAction(task.suggestedActions?.[0] || '');
-    setOperatorNotes('');
+    setOperatorNotes(task.actionTaken || task.operatorNotes || '');
+    setChosenSlot(task.timeSlot || 'original');
   };
 
   // Handle Mark Resolved
-  const handleResolveTask = () => {
+  const handleResolveTask = async () => {
     if (!selectedTask) return;
 
-    // Send to backend
-    fetch(`http://localhost:5000/api/operator/tasks/${selectedTask.id}/resolve`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        actionTaken: selectedAction,
-        operatorNotes: operatorNotes
-      })
-    }).catch(() => {});
+    const apiBase = (typeof window !== 'undefined' && window.location.hostname !== 'localhost')
+      ? window.location.origin
+      : 'http://localhost:5000';
+
+    const resolutionSummary = operatorNotes.trim() || selectedAction || 'Verified and approved by OpsLoop Graduate Specialist.';
+    const targetSlot = (chosenSlot && chosenSlot !== 'original') ? chosenSlot : selectedTask.timeSlot;
+
+    try {
+      await fetch(`${apiBase}/api/operator/tasks/${selectedTask.id}/resolve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          actionTaken: selectedAction,
+          operatorNotes: resolutionSummary,
+          updatedTimeSlot: targetSlot
+        })
+      });
+    } catch (err) {
+      console.error('Resolve task network error:', err);
+    }
 
     // Update local state immediately
     const updatedTasks = tasks.map(t =>
-      t.id === selectedTask.id ? { ...t, status: 'resolved' } : t
+      t.id === selectedTask.id ? { 
+        ...t, 
+        status: 'resolved',
+        actionTaken: selectedAction,
+        operatorNotes: resolutionSummary,
+        timeSlot: targetSlot || t.timeSlot
+      } : t
     );
     setTasks(updatedTasks);
 
@@ -249,9 +316,10 @@ export default function GraduateWorkspace() {
     setSelectedTask(nextPending || null);
     setSelectedAction(nextPending?.suggestedActions?.[0] || '');
     setOperatorNotes('');
+    setChosenSlot('original');
 
     // Trigger toast
-    showToast(`✓ Task resolved: "${selectedTask.title}"`);
+    showToast(`✓ Resolved & Customer QR screen updated: "${selectedTask.title}"`);
   };
 
   // Toast helper
@@ -315,18 +383,18 @@ export default function GraduateWorkspace() {
   };
 
   // Filter tasks
-  const pendingTasksList = tasks.filter(t => t.status === 'pending');
-  const filteredTasks = pendingTasksList.filter(t => {
-    if (activeTabFilter === 'urgent') return t.priority === 'Urgent' || t.priority === 'High';
-    if (activeTabFilter === 'conflict') return t.aiIntent === 'BOOKING_REQUEST';
-    if (activeTabFilter === 'enquiry') return t.aiIntent === 'GENERAL_ENQUIRY';
-    return true;
+  const filteredTasks = tasks.filter(t => {
+    if (activeTabFilter === 'urgent') return t.status === 'pending' && (t.priority === 'Urgent' || t.priority === 'High');
+    if (activeTabFilter === 'conflict') return t.status === 'pending' && (t.aiIntent === 'BOOKING_REQUEST' || t.aiIntent === 'BOOKING_CONFLICT' || t.type === 'slot_conflict');
+    if (activeTabFilter === 'enquiry') return t.status === 'pending' && t.aiIntent === 'GENERAL_ENQUIRY';
+    if (activeTabFilter === 'ai_auto') return t.type === 'ai_auto_approved' || t.aiIntent === 'AI_AUTO_COMPLETED' || t.status === 'resolved';
+    return t.status === 'pending';
   }).filter(t => {
     if (!searchQuery.trim()) return true;
     const q = searchQuery.toLowerCase();
-    return t.title.toLowerCase().includes(q) ||
-           t.clinicName.toLowerCase().includes(q) ||
-           t.customerName.toLowerCase().includes(q);
+    return (t.title || '').toLowerCase().includes(q) ||
+           (t.clinicName || '').toLowerCase().includes(q) ||
+           (t.customerName || '').toLowerCase().includes(q);
   });
 
   return (
@@ -363,9 +431,9 @@ export default function GraduateWorkspace() {
 
             <button
               onClick={() => setActiveNav('Overview')}
-              className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+              className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer ${
                 activeNav === 'Overview'
-                  ? 'bg-indigo-50 text-indigo-600 border-r-2 border-indigo-600'
+                  ? 'bg-indigo-50 text-indigo-600 border-r-2 border-indigo-600 font-semibold'
                   : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
               }`}
             >
@@ -377,9 +445,9 @@ export default function GraduateWorkspace() {
 
             <button
               onClick={() => setActiveNav('My Businesses')}
-              className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+              className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer ${
                 activeNav === 'My Businesses'
-                  ? 'bg-indigo-50 text-indigo-600 border-r-2 border-indigo-600'
+                  ? 'bg-indigo-50 text-indigo-600 border-r-2 border-indigo-600 font-semibold'
                   : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
               }`}
             >
@@ -394,9 +462,9 @@ export default function GraduateWorkspace() {
 
             <button
               onClick={() => setActiveNav('Task Queue')}
-              className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+              className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer ${
                 activeNav === 'Task Queue'
-                  ? 'bg-indigo-50 text-indigo-600 border-r-2 border-indigo-600'
+                  ? 'bg-indigo-50 text-indigo-600 border-r-2 border-indigo-600 font-semibold'
                   : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
               }`}
             >
@@ -415,11 +483,11 @@ export default function GraduateWorkspace() {
 
             <button
               onClick={() => handleOpenQR(clinics[0])}
-              className="w-full flex items-center justify-between px-3 py-2 rounded-md text-sm font-medium text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition-colors"
+              className="w-full flex items-center justify-between px-3 py-2 rounded-md text-sm font-medium text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer"
             >
               <div className="flex items-center gap-2.5">
                 <QrCode className="w-4 h-4 text-indigo-500" />
-                <span>QR Code Generator</span>
+                <span>Reception QR Standee</span>
               </div>
               <span className="text-[10px] bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded font-semibold">
                 Live
@@ -428,9 +496,9 @@ export default function GraduateWorkspace() {
 
             <button
               onClick={() => setActiveNav('Automation Workflows')}
-              className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+              className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer ${
                 activeNav === 'Automation Workflows'
-                  ? 'bg-indigo-50 text-indigo-600'
+                  ? 'bg-indigo-50 text-indigo-600 border-r-2 border-indigo-600 font-semibold'
                   : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
               }`}
             >
@@ -443,9 +511,9 @@ export default function GraduateWorkspace() {
 
             <button
               onClick={() => setActiveNav('Customer Requests')}
-              className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+              className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer ${
                 activeNav === 'Customer Requests'
-                  ? 'bg-indigo-50 text-indigo-600'
+                  ? 'bg-indigo-50 text-indigo-600 border-r-2 border-indigo-600 font-semibold'
                   : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
               }`}
             >
@@ -457,9 +525,9 @@ export default function GraduateWorkspace() {
 
             <button
               onClick={() => setActiveNav('Earnings & Payouts')}
-              className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+              className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer ${
                 activeNav === 'Earnings & Payouts'
-                  ? 'bg-indigo-50 text-indigo-600'
+                  ? 'bg-indigo-50 text-indigo-600 border-r-2 border-indigo-600 font-semibold'
                   : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
               }`}
             >
@@ -476,16 +544,23 @@ export default function GraduateWorkspace() {
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-3">
               <div className="relative">
-                <div className="w-9 h-9 rounded-full bg-indigo-600 text-white font-semibold flex items-center justify-center text-sm">
-                  AS
+                <div className="w-9 h-9 rounded-full bg-indigo-600 text-white font-semibold flex items-center justify-center text-xs">
+                  {user?.name ? user.name.slice(0, 2).toUpperCase() : 'AS'}
                 </div>
                 <span className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-emerald-500 border-2 border-white rounded-full"></span>
               </div>
-              <div>
-                <p className="text-sm font-semibold text-slate-900 leading-tight">Aarav Sharma</p>
-                <p className="text-[11px] text-slate-500">Certified Operator • Lvl 2</p>
+              <div className="overflow-hidden">
+                <p className="text-sm font-semibold text-slate-900 leading-tight truncate">{user?.name || 'Aarav Sharma'}</p>
+                <p className="text-[11px] text-slate-500 capitalize">{user?.role || 'operator'} • Authorized</p>
               </div>
             </div>
+            <button
+              onClick={logout}
+              title="Sign Out"
+              className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
           </div>
           <div className="bg-white border border-slate-200 rounded-md p-2 flex items-center justify-between">
             <span className="text-[11px] font-medium text-slate-500">Monthly Earnings</span>
@@ -501,9 +576,14 @@ export default function GraduateWorkspace() {
         {/* Breadcrumb & Live indicator */}
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-1.5 text-xs font-medium text-slate-500">
-            <span>Workspace</span>
+            <button 
+              onClick={() => setActiveNav('Overview')} 
+              className="hover:text-indigo-600 transition-colors cursor-pointer"
+            >
+              Workspace
+            </button>
             <span className="text-slate-300">/</span>
-            <span className="text-slate-900 font-semibold">Overview</span>
+            <span className="text-slate-900 font-semibold">{activeNav}</span>
           </div>
           <span className="h-4 w-px bg-slate-200"></span>
           <div className="flex items-center gap-1.5 text-xs font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-full">
@@ -541,11 +621,15 @@ export default function GraduateWorkspace() {
             <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-rose-500 rounded-full"></span>
           </button>
 
-          {/* Role Switcher */}
-          <div className="flex items-center gap-1.5 border border-slate-200 px-2.5 py-1.5 rounded-md bg-white hover:bg-slate-50 cursor-pointer text-xs font-medium text-slate-700">
-            <span>Operator View</span>
-            <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
-          </div>
+          {/* User Sign Out */}
+          <button 
+            onClick={logout}
+            className="flex items-center gap-1.5 border border-slate-200 px-2.5 py-1.5 rounded-md bg-white hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200 cursor-pointer text-xs font-medium text-slate-700 transition-colors"
+            title="Sign out of Graduate Operator workspace"
+          >
+            <LogOut className="w-3.5 h-3.5" />
+            <span>Sign Out</span>
+          </button>
         </div>
       </header>
 
@@ -585,7 +669,12 @@ export default function GraduateWorkspace() {
           {/* B. Key Metric Cards (Grid of 4) */}
           <div className="grid grid-cols-4 gap-4">
             {/* 1. Assigned Businesses */}
-            <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm hover:shadow-md transition-shadow">
+            <div 
+              onClick={() => setActiveNav('My Businesses')}
+              className={`bg-white border rounded-xl p-5 shadow-sm hover:shadow-md transition-all cursor-pointer ${
+                activeNav === 'My Businesses' ? 'border-indigo-500 ring-2 ring-indigo-500/20' : 'border-slate-200 hover:border-indigo-300'
+              }`}
+            >
               <div className="flex items-center justify-between text-slate-500 mb-2">
                 <span className="text-xs font-medium uppercase tracking-wider">Assigned Businesses</span>
                 <div className="w-8 h-8 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center">
@@ -600,7 +689,12 @@ export default function GraduateWorkspace() {
             </div>
 
             {/* 2. Pending Tasks */}
-            <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm hover:shadow-md transition-shadow">
+            <div 
+              onClick={() => setActiveNav('Task Queue')}
+              className={`bg-white border rounded-xl p-5 shadow-sm hover:shadow-md transition-all cursor-pointer ${
+                activeNav === 'Task Queue' ? 'border-amber-500 ring-2 ring-amber-500/20' : 'border-slate-200 hover:border-amber-300'
+              }`}
+            >
               <div className="flex items-center justify-between text-slate-500 mb-2">
                 <span className="text-xs font-medium uppercase tracking-wider">Pending Tasks</span>
                 <div className="w-8 h-8 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center">
@@ -615,7 +709,12 @@ export default function GraduateWorkspace() {
             </div>
 
             {/* 3. Completed This Month */}
-            <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm hover:shadow-md transition-shadow">
+            <div 
+              onClick={() => setActiveNav('Task Queue')}
+              className={`bg-white border rounded-xl p-5 shadow-sm hover:shadow-md transition-all cursor-pointer ${
+                activeNav === 'Task Queue' ? 'border-emerald-500 ring-2 ring-emerald-500/20' : 'border-slate-200 hover:border-emerald-300'
+              }`}
+            >
               <div className="flex items-center justify-between text-slate-500 mb-2">
                 <span className="text-xs font-medium uppercase tracking-wider">Completed This Month</span>
                 <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center">
@@ -630,7 +729,12 @@ export default function GraduateWorkspace() {
             </div>
 
             {/* 4. Estimated Earnings */}
-            <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm hover:shadow-md transition-shadow">
+            <div 
+              onClick={() => setActiveNav('Earnings & Payouts')}
+              className={`bg-white border rounded-xl p-5 shadow-sm hover:shadow-md transition-all cursor-pointer ${
+                activeNav === 'Earnings & Payouts' ? 'border-violet-500 ring-2 ring-violet-500/20' : 'border-slate-200 hover:border-violet-300'
+              }`}
+            >
               <div className="flex items-center justify-between text-slate-500 mb-2">
                 <span className="text-xs font-medium uppercase tracking-wider">Estimated Earnings</span>
                 <div className="w-8 h-8 rounded-lg bg-violet-50 text-violet-600 flex items-center justify-center">
@@ -645,20 +749,30 @@ export default function GraduateWorkspace() {
           </div>
 
           {/* C. Two-Column Operational Layout */}
-          <div className="grid grid-cols-12 gap-6 items-start">
-            {/* ================= LEFT COLUMN (65% width = 8 cols) ================= */}
-            <div className="col-span-8 space-y-6">
-              {/* 1. Section: My Assigned Clinics */}
-              <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
-                <div className="flex items-center justify-between mb-4">
-                  <div>
-                    <h2 className="text-base font-bold text-slate-900">My Assigned Clinics</h2>
-                    <p className="text-xs text-slate-500">Live operational state and daily automated throughput</p>
-                  </div>
-                  <span className="text-xs font-medium text-slate-400">4 Clinics Active</span>
-                </div>
+          {(activeNav === 'Overview' || activeNav === 'My Businesses' || activeNav === 'Task Queue') && (
+            <div className="grid grid-cols-12 gap-6 items-start">
+              {/* ================= LEFT COLUMN ================= */}
+              <div className={activeNav === 'My Businesses' ? "col-span-12 space-y-6" : "col-span-8 space-y-6"}>
+                {/* 1. Section: My Assigned Clinics */}
+                {(activeNav === 'Overview' || activeNav === 'My Businesses') && (
+                  <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
+                    <div className="flex items-center justify-between mb-4">
+                      <div>
+                        <h2 className="text-base font-bold text-slate-900">
+                          {activeNav === 'My Businesses' ? 'My Assigned Clinics & Partner Hospitals' : 'My Assigned Clinics'}
+                        </h2>
+                        <p className="text-xs text-slate-500">
+                          {activeNav === 'My Businesses'
+                            ? 'Live operational management of all assigned clinics. Click "Workspace ↗" to manage doctor rosters and live queues.'
+                            : 'Live operational state and daily automated throughput'}
+                        </p>
+                      </div>
+                      <span className="text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-full">
+                        {clinics.length} Clinics Active
+                      </span>
+                    </div>
 
-                <div className="grid grid-cols-2 gap-3.5">
+                    <div className={activeNav === 'My Businesses' ? "grid grid-cols-3 gap-4" : "grid grid-cols-2 gap-3.5"}>
                   {clinics.map((clinic) => (
                     <div
                       key={clinic.id}
@@ -666,9 +780,13 @@ export default function GraduateWorkspace() {
                     >
                       <div className="flex items-start justify-between">
                         <div>
-                          <h3 className="text-sm font-semibold text-slate-900 group-hover:text-indigo-600 transition-colors">
+                          <Link
+                            to={`/clinic/${clinic.slug}`}
+                            className="text-sm font-semibold text-slate-900 group-hover:text-indigo-600 transition-colors hover:underline block"
+                            title={`Open ${clinic.name} Workspace`}
+                          >
                             {clinic.name}
-                          </h3>
+                          </Link>
                           <p className="text-[11px] text-slate-500">{clinic.category}</p>
                         </div>
                         <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
@@ -695,25 +813,28 @@ export default function GraduateWorkspace() {
                       <div className="mt-3 flex items-center gap-2 pt-2">
                         <button
                           onClick={() => handleOpenQR(clinic)}
-                          className="flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 rounded-md transition-colors shadow-2xs"
+                          className="flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 rounded-md transition-colors shadow-2xs cursor-pointer"
                         >
                           <QrCode className="w-3.5 h-3.5 text-indigo-600" />
                           <span>QR Code</span>
                         </button>
-                        <button
-                          onClick={() => showToast(`Opened management console for ${clinic.name}`)}
-                          className="flex-1 flex items-center justify-center gap-1 py-1.5 text-xs font-medium text-indigo-600 bg-indigo-50/70 hover:bg-indigo-100 rounded-md transition-colors"
+                        <Link
+                          to={`/clinic/${clinic.slug}`}
+                          className="flex-1 flex items-center justify-center gap-1 py-1.5 text-xs font-medium text-indigo-600 bg-indigo-50/70 hover:bg-indigo-100 rounded-md transition-colors cursor-pointer"
+                          title={`Open ${clinic.name} Workspace`}
                         >
                           <span>Workspace</span>
                           <ExternalLink className="w-3 h-3" />
-                        </button>
+                        </Link>
                       </div>
                     </div>
                   ))}
                 </div>
               </div>
+            )}
 
-              {/* 2. Section: High-Priority Task Queue */}
+            {/* 2. Section: High-Priority Task Queue */}
+            {(activeNav === 'Overview' || activeNav === 'Task Queue') && (
               <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
                 <div className="p-5 border-b border-slate-200 flex items-center justify-between">
                   <div>
@@ -761,6 +882,14 @@ export default function GraduateWorkspace() {
                       }`}
                     >
                       Enquiries
+                    </button>
+                    <button
+                      onClick={() => setActiveTabFilter('ai_auto')}
+                      className={`px-2.5 py-1 rounded-md transition-colors ${
+                        activeTabFilter === 'ai_auto' ? 'bg-white text-emerald-700 shadow-2xs font-semibold' : 'text-slate-500 hover:text-slate-900'
+                      }`}
+                    >
+                      ⚡ AI Auto-Completed
                     </button>
                   </div>
                 </div>
@@ -844,9 +973,11 @@ export default function GraduateWorkspace() {
                   )}
                 </div>
               </div>
-            </div>
+            )}
+          </div>
 
-            {/* ================= RIGHT COLUMN (35% width = 4 cols) ================= */}
+          {/* ================= RIGHT COLUMN (35% width = 4 cols) ================= */}
+          {(activeNav === 'Overview' || activeNav === 'Task Queue') && (
             <div className="col-span-4 space-y-6">
               {/* 1. Interactive "Quick Task Resolver Slide-over/Panel" */}
               <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
@@ -926,18 +1057,60 @@ export default function GraduateWorkspace() {
                       </div>
                     </div>
 
-                    {/* Operator Notes */}
+                    {/* Alternate Slot Selector (For Conflicts) */}
+                    {selectedTask.timeSlot && (
+                      <div>
+                        <label className="block text-[11px] font-semibold uppercase text-slate-400 tracking-wider mb-1.5">
+                          Reassign Time Slot (Updates Patient Pass Live)
+                        </label>
+                        <select
+                          value={chosenSlot}
+                          onChange={(e) => setChosenSlot(e.target.value)}
+                          className="w-full text-xs p-2.5 bg-slate-50 border border-slate-200 rounded-lg text-slate-800 font-medium outline-none focus:border-indigo-500"
+                        >
+                          <option value="original">Keep Original Slot ({selectedTask.timeSlot})</option>
+                          <option value="11:15 AM">Shift to 11:15 AM (Next Available Morning)</option>
+                          <option value="11:30 AM">Shift to 11:30 AM</option>
+                          <option value="11:45 AM">Shift to 11:45 AM</option>
+                          <option value="12:00 PM">Shift to 12:00 PM</option>
+                          <option value="04:30 PM">Shift to 04:30 PM (Evening OPD)</option>
+                          <option value="05:00 PM">Shift to 05:00 PM (Evening OPD)</option>
+                          <option value="05:30 PM">Shift to 05:30 PM (Evening OPD)</option>
+                        </select>
+                      </div>
+                    )}
+
+                    {/* Operator Resolution Notes / Message to Patient */}
                     <div>
-                      <label className="block text-[11px] font-semibold uppercase text-slate-400 tracking-wider mb-1.5">
-                        Operator Notes / Message to Clinic
-                      </label>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <label className="block text-[11px] font-semibold uppercase text-slate-400 tracking-wider">
+                          Summary to Patient (Shown on Client Screen)
+                        </label>
+                      </div>
                       <textarea
                         rows={2}
                         value={operatorNotes}
                         onChange={(e) => setOperatorNotes(e.target.value)}
-                        placeholder="e.g. Spoke to patient, confirmed 11:00 AM slot."
+                        placeholder="e.g. Verified with Dr. Rajesh. Shifted slot to 11:15 AM to eliminate waiting time. Please arrive 10m early."
                         className="w-full text-xs p-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 text-slate-800"
                       />
+                      {/* Quick preset chips */}
+                      <div className="flex flex-wrap gap-1 mt-1.5">
+                        {[
+                          'Shifted to 11:15 AM due to doctor overlap.',
+                          'Approved priority pass with Duty Doctor.',
+                          'Confirmed slot; clinic ready for check-in.'
+                        ].map((preset, idx) => (
+                          <button
+                            key={idx}
+                            type="button"
+                            onClick={() => setOperatorNotes(preset)}
+                            className="text-[10px] bg-slate-100 hover:bg-slate-200 text-slate-600 px-2 py-0.5 rounded transition-colors"
+                          >
+                            + {preset.slice(0, 24)}...
+                          </button>
+                        ))}
+                      </div>
                     </div>
 
                     {/* Action button */}
@@ -946,7 +1119,7 @@ export default function GraduateWorkspace() {
                       className="w-full flex items-center justify-center gap-2 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold shadow-sm transition-all"
                     >
                       <CheckSquare className="w-4 h-4" />
-                      <span>Mark Resolved ({selectedAction ? 'Execute Action' : 'Close'})</span>
+                      <span>⚡ Resolve & Update Client QR Pass</span>
                     </button>
                   </div>
                 ) : (
@@ -1000,62 +1173,166 @@ export default function GraduateWorkspace() {
                 </div>
               </div>
             </div>
+          )}
+        </div>
+      )}
+
+        {/* D. Automation Workflows View */}
+        {activeNav === 'Automation Workflows' && (
+          <div className="space-y-6 animate-fade-in">
+            <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm">
+              <div className="flex items-center justify-between pb-4 border-b border-slate-200 mb-6">
+                <div>
+                  <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+                    <Bot className="w-5 h-5 text-violet-600" />
+                    Gemini 2.0 AI Automation Workflows
+                  </h2>
+                  <p className="text-xs text-slate-500 mt-1">
+                    Real-time autonomous triage, intent extraction, slot collision prevention, and human-in-the-loop escalation rules.
+                  </p>
+                </div>
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                  Workflow Engine Live
+                </span>
+              </div>
+
+              <div className="grid grid-cols-3 gap-4">
+                <div className="border border-slate-200 rounded-lg p-4 bg-slate-50/50">
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-xs font-bold text-slate-900">1. Instant QR Slot Auto-Approval</span>
+                    <span className="text-[10px] bg-emerald-100 text-emerald-800 font-bold px-1.5 py-0.5 rounded">Active</span>
+                  </div>
+                  <p className="text-xs text-slate-600">
+                    When patient selects an available doctor slot, AI validates clinic status, checks doctor duty, issues token, and notifies graduate with zero friction.
+                  </p>
+                </div>
+
+                <div className="border border-slate-200 rounded-lg p-4 bg-slate-50/50">
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-xs font-bold text-slate-900">2. Collision & Overlap Detector</span>
+                    <span className="text-[10px] bg-amber-100 text-amber-800 font-bold px-1.5 py-0.5 rounded">Active</span>
+                  </div>
+                  <p className="text-xs text-slate-600">
+                    Detects double bookings or off-duty slots. Automatically holds patient in coordinating state and dispatches high-priority task to operator queue.
+                  </p>
+                </div>
+
+                <div className="border border-slate-200 rounded-lg p-4 bg-slate-50/50">
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-xs font-bold text-slate-900">3. Emergency Escalation Guardrail</span>
+                    <span className="text-[10px] bg-rose-100 text-rose-800 font-bold px-1.5 py-0.5 rounded">Strict</span>
+                  </div>
+                  <p className="text-xs text-slate-600">
+                    Critical symptoms (chest pain, acute breathing distress) trigger instantaneous medical casualty guidance directing patient to nearest emergency hospital.
+                  </p>
+                </div>
+              </div>
+            </div>
           </div>
+        )}
+
+        {/* E. Customer Requests View */}
+        {activeNav === 'Customer Requests' && (
+          <div className="space-y-6 animate-fade-in">
+            <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm">
+              <div className="flex items-center justify-between pb-4 border-b border-slate-200 mb-6">
+                <div>
+                  <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+                    <MessageSquare className="w-5 h-5 text-indigo-600" />
+                    Live Customer Requests & QR Scans
+                  </h2>
+                  <p className="text-xs text-slate-500 mt-1">
+                    Incoming inquiries, appointments, and triage requests across all assigned clinics.
+                  </p>
+                </div>
+                <span className="text-xs font-semibold text-slate-600 bg-slate-100 px-3 py-1 rounded-full">
+                  Live Stream Active
+                </span>
+              </div>
+
+              <div className="divide-y divide-slate-100">
+                {tasks.slice(0, 6).map((t, idx) => (
+                  <div key={idx} className="py-3.5 flex items-center justify-between">
+                    <div className="flex items-start gap-3">
+                      <div className="w-8 h-8 rounded-full bg-indigo-50 text-indigo-700 font-bold flex items-center justify-center text-xs">
+                        {t.customerName?.charAt(0) || 'P'}
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-semibold text-slate-900">{t.customerName}</span>
+                          <span className="text-xs text-slate-400">• {t.customerPhone}</span>
+                          <span className="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded font-medium">{t.clinicName}</span>
+                        </div>
+                        <p className="text-xs text-slate-600 mt-0.5">{t.customerMessage}</p>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${
+                        t.status === 'resolved' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-amber-50 text-amber-700 border border-amber-200'
+                      }`}>
+                        {t.status === 'resolved' ? 'Resolved' : 'Review Required'}
+                      </span>
+                      <p className="text-[10px] text-slate-400 mt-1">{t.timeElapsed}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* F. Earnings & Payouts View */}
+        {activeNav === 'Earnings & Payouts' && (
+          <div className="space-y-6 animate-fade-in">
+            <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm">
+              <div className="flex items-center justify-between pb-4 border-b border-slate-200 mb-6">
+                <div>
+                  <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+                    <Wallet className="w-5 h-5 text-violet-600" />
+                    Graduate Operator Earnings & Payouts
+                  </h2>
+                  <p className="text-xs text-slate-500 mt-1">
+                    Direct automated payouts for resolving exceptions, managing clinic workflows, and AI supervision.
+                  </p>
+                </div>
+                <span className="text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-3 py-1 rounded-full">
+                  Direct Deposit Active
+                </span>
+              </div>
+
+              <div className="grid grid-cols-3 gap-6 mb-6">
+                <div className="border border-slate-200 rounded-xl p-5 bg-gradient-to-br from-indigo-50/50 to-white">
+                  <span className="text-xs font-semibold text-indigo-700">Accumulated This Month</span>
+                  <div className="text-3xl font-extrabold text-slate-900 mt-1">₹12,500</div>
+                  <p className="text-xs text-slate-500 mt-2">126 automated actions + 4 verified clinics</p>
+                </div>
+
+                <div className="border border-slate-200 rounded-xl p-5 bg-white">
+                  <span className="text-xs font-semibold text-slate-600">Next Scheduled Payout</span>
+                  <div className="text-2xl font-bold text-slate-900 mt-1">Nov 5, 2026</div>
+                  <p className="text-xs text-emerald-600 mt-2 font-medium">Automatic transfer to HDFC •••• 4412</p>
+                </div>
+
+                <div className="border border-slate-200 rounded-xl p-5 bg-white">
+                  <span className="text-xs font-semibold text-slate-600">Average Resolution Fee</span>
+                  <div className="text-2xl font-bold text-slate-900 mt-1">₹100 / task</div>
+                  <p className="text-xs text-slate-500 mt-2">Bonus: ₹50 per verified AI clean triage</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
         </div>
       </main>
 
-      {/* ================= QR CODE MODAL ================= */}
+      {/* ================= RECEPTION QR STANDEE MODAL (EXACT SAME AS CLINIC OWNER DASH) ================= */}
       {showQRModal && qrClinic && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs z-50 flex items-center justify-center p-4 animate-fade-in">
-          <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-2xl border border-slate-200 relative text-center">
-            <button
-              onClick={() => setShowQRModal(false)}
-              className="absolute top-4 right-4 p-1.5 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-slate-100 transition-colors"
-            >
-              <X className="w-4 h-4" />
-            </button>
-
-            <div className="w-10 h-10 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center mx-auto mb-3">
-              <QrCode className="w-5 h-5" />
-            </div>
-
-            <h3 className="text-base font-bold text-slate-900">{qrClinic.name}</h3>
-            <p className="text-xs text-slate-500 mb-4">{qrClinic.category}</p>
-
-            {/* QR Code Canvas */}
-            <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl inline-block shadow-inner mb-4">
-              <QRCodeSVG
-                value={qrUrl}
-                size={180}
-                level="H"
-                includeMargin={false}
-              />
-            </div>
-
-            <p className="text-[11px] text-slate-400 mb-3 font-mono break-all px-2">
-              {qrUrl}
-            </p>
-
-            <div className="flex items-center gap-2">
-              <button
-                onClick={handleCopyLink}
-                className="flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition-colors"
-              >
-                {copiedLink ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
-                <span>{copiedLink ? 'Copied Link!' : 'Copy Link'}</span>
-              </button>
-              <a
-                href={`/c/${qrClinic.slug}`}
-                target="_blank"
-                rel="noreferrer"
-                className="flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition-colors shadow-sm"
-              >
-                <span>Test Page</span>
-                <ExternalLink className="w-3.5 h-3.5" />
-              </a>
-            </div>
-          </div>
-        </div>
+        <QrStandeeModal
+          clinic={qrClinic}
+          publicUrl={publicUrl}
+          onClose={() => setShowQRModal(false)}
+        />
       )}
 
       {/* ================= ADD MANUAL TASK MODAL ================= */}

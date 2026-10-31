@@ -12,6 +12,19 @@ let stats = {
 
 let clinics = [
   {
+    id: 'c0',
+    name: 'Sanjeevani Clinic',
+    slug: 'sanjeevani-clinic',
+    category: 'Multi-Speciality OPD & Emergency Care',
+    address: '14th Cross, Ashok Nagar, Mysuru, Karnataka',
+    status: 'Active & Synced',
+    pendingEnquiries: 1,
+    bookingsToday: 16,
+    workflowHealth: 100,
+    doctorsCount: 3,
+    phone: '+91 98450 12345'
+  },
+  {
     id: 'c1',
     name: 'GreenLife Clinic',
     slug: 'greenlife-clinic',
@@ -136,59 +149,230 @@ let tasks = [
   }
 ];
 
+require('../models/User');
+require('../models/Business');
+require('../models/Doctor');
+const Appointment = require('../models/Appointment');
+const GraduateTask = require('../models/GraduateTask');
+
 // GET: Operator metrics
-router.get('/stats', (req, res) => {
-  res.json({
-    success: true,
-    data: {
-      ...stats,
-      pendingTasks: tasks.filter(t => t.status === 'pending').length
-    }
-  });
+router.get('/stats', async (req, res) => {
+  try {
+    const dbPendingCount = await GraduateTask.countDocuments({ status: 'pending' });
+    const mockPendingCount = tasks.filter(t => t.status === 'pending').length;
+    const dbResolvedCount = await GraduateTask.countDocuments({ status: 'resolved' });
+
+    res.json({
+      success: true,
+      publicUrl: req.app.locals.publicUrl || '',
+      data: {
+        ...stats,
+        pendingTasks: dbPendingCount + mockPendingCount,
+        completedThisMonth: stats.completedThisMonth + dbResolvedCount
+      }
+    });
+  } catch (err) {
+    res.json({
+      success: true,
+      publicUrl: req.app.locals.publicUrl || '',
+      data: {
+        ...stats,
+        pendingTasks: tasks.filter(t => t.status === 'pending').length
+      }
+    });
+  }
 });
 
 // GET: Assigned clinics
 router.get('/clinics', (req, res) => {
   res.json({
     success: true,
+    publicUrl: req.app.locals.publicUrl || '',
     data: clinics
   });
 });
 
-// GET: Tasks queue
-router.get('/tasks', (req, res) => {
-  const { status } = req.query;
-  const filtered = status ? tasks.filter(t => t.status === status) : tasks;
-  res.json({
-    success: true,
-    data: filtered
-  });
+// Helper: Format relative elapsed time
+function formatRelativeTime(date) {
+  if (!date) return 'Just now';
+  const diffMs = Date.now() - new Date(date).getTime();
+  const mins = Math.floor(diffMs / 60000);
+  if (mins < 1) return 'Just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+
+// GET: Tasks queue (Live MongoDB sync + In-memory store)
+router.get('/tasks', async (req, res) => {
+  try {
+    const { status } = req.query;
+
+    // 1. Fetch real MongoDB tasks
+    const query = status ? { status } : {};
+    const mongoTasks = await GraduateTask.find(query)
+      .populate('appointmentId')
+      .populate('businessId')
+      .sort({ createdAt: -1 });
+
+    const formattedDbTasks = mongoTasks.map(t => {
+      const apt = t.appointmentId;
+      const biz = t.businessId;
+      const isAutoApproved = t.type === 'ai_auto_approved';
+
+      return {
+        id: t._id.toString(),
+        _id: t._id.toString(),
+        appointmentId: apt ? apt._id.toString() : null,
+        title: isAutoApproved 
+          ? `⚡ AI Auto-Approved: Token ${apt?.tokenNo || 'T-AUTO'}` 
+          : (t.type === 'slot_conflict' ? `Slot Conflict: Token ${apt?.tokenNo || 'T-AUTO'}` : 'Exception Review'),
+        clinicName: biz?.name || 'Sanjeevani Clinic',
+        clinicSlug: biz?.slug || 'sanjeevani-clinic',
+        priority: t.priority === 'high' ? 'Urgent' : (isAutoApproved ? 'Low' : 'Medium'),
+        timeElapsed: formatRelativeTime(t.createdAt),
+        customerName: t.customerName,
+        customerPhone: t.customerPhone,
+        customerMessage: apt 
+          ? `Chief Complaint: "${apt.symptoms}". Requested slot: ${apt.timeSlot} with ${apt.doctorName}.`
+          : t.details,
+        aiFlag: isAutoApproved 
+          ? 'AI checked slot availability, doctor duty status & clinic hours: 0 conflicts detected. Auto-routed to clinic queue.'
+          : t.details,
+        aiIntent: isAutoApproved ? 'AI_AUTO_COMPLETED' : 'BOOKING_CONFLICT',
+        confidence: isAutoApproved ? '99%' : '72%',
+        suggestedActions: isAutoApproved 
+          ? ['Auto-Approved by Gemini AI', 'No Intervention Needed']
+          : [
+              'Shift to Next Available Slot (11:15 AM)',
+              'Confirm Overwrite & Fit In Slot',
+              'Reassign to Duty Doctor',
+              'Send Custom Note to Patient'
+            ],
+        status: t.status,
+        actionTaken: t.resolutionNote || '',
+        operatorNotes: t.resolutionNote || '',
+        timeSlot: apt?.timeSlot || '',
+        doctorName: apt?.doctorName || '',
+        tokenNo: apt?.tokenNo || '',
+        type: t.type
+      };
+    });
+
+    // 2. Fetch mock tasks
+    const filteredMockTasks = status ? tasks.filter(t => t.status === status) : tasks;
+
+    // Merge: MongoDB tasks first (most relevant real-time actions)
+    const combinedTasks = [...formattedDbTasks, ...filteredMockTasks];
+
+    res.json({
+      success: true,
+      data: combinedTasks
+    });
+  } catch (err) {
+    console.error('Failed to load DB tasks:', err);
+    const filtered = status ? tasks.filter(t => t.status === status) : tasks;
+    res.json({
+      success: true,
+      data: filtered
+    });
+  }
 });
 
-// POST: Resolve a task
-router.post('/tasks/:id/resolve', (req, res) => {
-  const { id } = req.params;
-  const { actionTaken, operatorNotes } = req.body;
+// POST: Resolve a task (Updates both GraduateTask and MongoDB Appointment)
+router.post('/tasks/:id/resolve', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { actionTaken, operatorNotes, updatedTimeSlot, updatedDoctorId } = req.body;
+    const resolutionText = operatorNotes || actionTaken || 'Resolved by Graduate Operator';
 
-  const taskIndex = tasks.findIndex(t => t.id === id);
-  if (taskIndex === -1) {
-    return res.status(404).json({ success: false, message: 'Task not found' });
+    let resolvedAppointment = null;
+    let resolvedTask = null;
+
+    // Check if ID is a valid MongoDB ObjectId
+    const isMongoId = /^[0-9a-fA-F]{24}$/.test(id);
+
+    if (isMongoId) {
+      // 1. Try finding in GraduateTask
+      const dbTask = await GraduateTask.findById(id);
+      if (dbTask) {
+        dbTask.status = 'resolved';
+        dbTask.resolutionNote = resolutionText;
+        dbTask.resolvedAt = new Date();
+        await dbTask.save();
+        resolvedTask = dbTask;
+
+        if (dbTask.appointmentId) {
+          const updateData = {
+            status: 'confirmed',
+            graduateResolutionNotes: resolutionText,
+            conflictReason: ''
+          };
+          if (updatedTimeSlot) updateData.timeSlot = updatedTimeSlot;
+          if (updatedDoctorId) {
+            const doc = await Doctor.findById(updatedDoctorId);
+            if (doc) {
+              updateData.doctorId = doc._id;
+              updateData.doctorName = doc.name;
+            }
+          }
+          resolvedAppointment = await Appointment.findByIdAndUpdate(
+            dbTask.appointmentId,
+            updateData,
+            { returnDocument: 'after' }
+          );
+        }
+      } else {
+        // 2. Try finding directly in Appointment
+        const directApt = await Appointment.findById(id);
+        if (directApt) {
+          const updateData = {
+            status: 'confirmed',
+            graduateResolutionNotes: resolutionText,
+            conflictReason: ''
+          };
+          if (updatedTimeSlot) updateData.timeSlot = updatedTimeSlot;
+          resolvedAppointment = await Appointment.findByIdAndUpdate(
+            id,
+            updateData,
+            { returnDocument: 'after' }
+          );
+
+          // Also mark linked GraduateTask if any
+          await GraduateTask.updateMany(
+            { appointmentId: id },
+            { status: 'resolved', resolutionNote: resolutionText, resolvedAt: new Date() }
+          );
+        }
+      }
+    }
+
+    // 3. Update in-memory tasks array if it matches
+    const taskIndex = tasks.findIndex(t => t.id === id);
+    if (taskIndex !== -1) {
+      tasks[taskIndex].status = 'resolved';
+      tasks[taskIndex].actionTaken = actionTaken || 'Resolved by Operator';
+      tasks[taskIndex].operatorNotes = resolutionText;
+      tasks[taskIndex].resolvedAt = new Date().toISOString();
+      resolvedTask = tasks[taskIndex];
+    }
+
+    stats.completedThisMonth += 1;
+    const dbPending = await GraduateTask.countDocuments({ status: 'pending' }).catch(() => 0);
+    const mockPending = tasks.filter(t => t.status === 'pending').length;
+
+    res.json({
+      success: true,
+      message: 'Task successfully resolved and client appointment updated in real-time.',
+      appointment: resolvedAppointment,
+      data: resolvedTask || { id, status: 'resolved', resolutionNote: resolutionText },
+      pendingTasksCount: dbPending + mockPending
+    });
+  } catch (err) {
+    console.error('Error resolving task:', err);
+    res.status(500).json({ success: false, error: err.message });
   }
-
-  tasks[taskIndex].status = 'resolved';
-  tasks[taskIndex].actionTaken = actionTaken || 'Resolved by Operator';
-  tasks[taskIndex].operatorNotes = operatorNotes || '';
-  tasks[taskIndex].resolvedAt = new Date().toISOString();
-
-  stats.completedThisMonth += 1;
-  const pendingCount = tasks.filter(t => t.status === 'pending').length;
-
-  res.json({
-    success: true,
-    message: 'Task successfully resolved',
-    data: tasks[taskIndex],
-    pendingTasksCount: pendingCount
-  });
 });
 
 // POST: Add manual task

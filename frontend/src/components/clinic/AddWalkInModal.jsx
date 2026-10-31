@@ -1,14 +1,21 @@
 import React, { useState } from 'react';
 import { X, UserPlus, Stethoscope, Phone, Clock, FileText } from 'lucide-react';
 
-export default function AddWalkInModal({ doctors, onAddAppointment, onClose }) {
+const COMMON_SLOTS = [
+  '09:00 AM', '09:30 AM', '10:00 AM', '10:30 AM', 
+  '11:00 AM', '11:30 AM', '12:00 PM', '12:30 PM',
+  '04:00 PM', '04:30 PM', '05:00 PM', '05:30 PM', 
+  '06:00 PM', '06:30 PM', '07:00 PM', '07:30 PM'
+];
+
+export default function AddWalkInModal({ doctors, activeSlotLocks = [], onAddAppointment, onClose }) {
   const [patientName, setPatientName] = useState('');
   const [phone, setPhone] = useState('');
   const [age, setAge] = useState('');
   const [gender, setGender] = useState('Male');
   const [bloodGroup, setBloodGroup] = useState('O+');
-  const [doctorId, setDoctorId] = useState(doctors[0]?.id || '');
-  const [timeSlot, setTimeSlot] = useState('11:45 AM');
+  const [doctorId, setDoctorId] = useState(doctors[0]?._id || doctors[0]?.id || '');
+  const [timeSlot, setTimeSlot] = useState('11:00 AM');
   const [symptoms, setSymptoms] = useState('');
 
   const handleSubmit = (e) => {
@@ -198,20 +205,33 @@ export default function AddWalkInModal({ doctors, onAddAppointment, onClose }) {
               <label style={{ fontSize: '12.5px', fontWeight: 600, color: 'var(--text-main)', display: 'block', marginBottom: '4px' }}>
                 Time Slot
               </label>
-              <input 
-                type="text" 
+              <select 
                 value={timeSlot}
                 onChange={(e) => setTimeSlot(e.target.value)}
                 style={{
                   width: '100%',
-                  padding: '9px 12px',
+                  padding: '9px 10px',
                   fontSize: '13px',
                   borderRadius: 'var(--radius-md)',
                   border: '1px solid var(--border-subtle)',
                   outline: 'none',
                   background: 'var(--bg-subtle)'
                 }}
-              />
+              >
+                {COMMON_SLOTS.map(slot => {
+                  const isLocked = activeSlotLocks.some(l => {
+                    const lockDocId = String(l.doctorId?._id || l.doctorId);
+                    const selDocId = String(doctorId);
+                    return lockDocId === selDocId && l.timeSlot?.trim() === slot.trim() && new Date(l.expiresAt) > new Date();
+                  });
+
+                  return (
+                    <option key={slot} value={slot}>
+                      {slot} {isLocked ? '(🔒 Blocked for 20m)' : ''}
+                    </option>
+                  );
+                })}
+              </select>
             </div>
           </div>
 

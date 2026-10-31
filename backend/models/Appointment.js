@@ -7,6 +7,7 @@ const appointmentSchema = new mongoose.Schema({
   doctorName: { type: String, required: true },
   patientName: { type: String, required: true },
   patientPhone: { type: String, required: true },
+  patientEmail: { type: String, default: '' },
   age: { type: Number },
   gender: { type: String, default: 'Not specified' },
   bloodGroup: { type: String, default: '' },
@@ -16,6 +17,7 @@ const appointmentSchema = new mongoose.Schema({
   status: { 
     type: String, 
     enum: [
+      'pending_doctor_acceptance',
       'confirmed', 
       'checked_in', 
       'in_consultation', 
@@ -23,9 +25,12 @@ const appointmentSchema = new mongoose.Schema({
       'pending_graduate_review', 
       'cancelled'
     ], 
-    default: 'confirmed',
+    default: 'pending_doctor_acceptance',
     index: true
   },
+  doctorAccepted: { type: Boolean, default: false },
+  acceptedAt: { type: Date },
+  doctorNotes: { type: String, default: '' },
   bookingSource: { 
     type: String, 
     enum: ['qr_ai', 'walk_in'], 
